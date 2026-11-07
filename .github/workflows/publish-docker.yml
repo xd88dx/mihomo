@@ -58,7 +58,7 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p bin
-          VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo meta)-p1-$(git rev-parse --short HEAD)"
+          VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo meta)-fix1-$(git rev-parse --short HEAD)"
           echo "$VERSION" > bin/version.txt
           LDFLAGS='-s -w -buildid= -X "github.com/metacubex/mihomo/constant.Version='"$VERSION"'" -X "github.com/metacubex/mihomo/constant.BuildTime='"$(date -u)"'"'
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -tags with_gvisor -trimpath -ldflags "$LDFLAGS" -o "bin/mihomo-linux-amd64-v1-$VERSION" .
