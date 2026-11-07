@@ -52,6 +52,18 @@ func (p *Proxy) AliveForTestUrl(url string) bool {
 	return p.alive.Load()
 }
 
+// SetAliveForTestUrl implements C.Proxy
+// feed external signals (e.g. real dial failures) back into the selection state,
+// so the group stops picking this proxy before the next scheduled round
+func (p *Proxy) SetAliveForTestUrl(url string, alive bool) {
+	if state, ok := p.extra.Load(url); ok {
+		state.alive.Store(alive)
+		return
+	}
+
+	p.alive.Store(alive)
+}
+
 // DialContext implements C.ProxyAdapter
 func (p *Proxy) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
 	conn, err := p.ProxyAdapter.DialContext(ctx, metadata)

@@ -12,7 +12,13 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/log"
 )
+
+// forceTestInterval is the minimal interval between two forced group re-tests
+// triggered by real dial failures, keeping the probe load bounded even if the
+// whole group is dead and hammered by clients
+const forceTestInterval = 30 * time.Second
 
 type URLTestOption struct {
 	Tolerance uint16 `group:"tolerance,omitempty"`
@@ -27,6 +33,7 @@ type URLTest struct {
 	disableUDP     bool
 	fastNode       C.Proxy
 	fastSingle     *singledo.Single[C.Proxy]
+	forceSingle    *singledo.Single[struct{}]
 }
 
 func (u *URLTest) Now() string {
@@ -60,7 +67,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
-		u.onDialFailed(proxy.Type(), err, u.healthCheck)
+		u.onDialFail(proxy)
 	}
 
 	if N.NeedHandshake(c) {
@@ -68,7 +75,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 			if err == nil {
 				u.onDialSuccess()
 			} else {
-				u.onDialFailed(proxy.Type(), err, u.healthCheck)
+				u.onDialFail(proxy)
 			}
 		})
 	}
@@ -83,7 +90,7 @@ func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
-		u.onDialFailed(proxy.Type(), err, u.healthCheck)
+		u.onDialFail(proxy)
 	}
 
 	return pc, err
@@ -98,6 +105,25 @@ func (u *URLTest) healthCheck() {
 	u.fastSingle.Reset()
 	u.GroupBase.healthCheck()
 	u.fastSingle.Reset()
+}
+
+// onDialFail feeds a real dial failure back into the selection state: the chosen
+// proxy is marked dead for the group test url immediately, so the next dial picks
+// another alive proxy instead of retrying the same failing one until the next
+// scheduled round. the full group re-test is rate limited by forceSingle, so the
+// probe load stays bounded no matter how many requests keep failing.
+func (u *URLTest) onDialFail(proxy C.Proxy) {
+	proxy.SetAliveForTestUrl(u.testUrl, false)
+	u.fastSingle.Reset()
+	go u.forceHealthCheck()
+}
+
+func (u *URLTest) forceHealthCheck() {
+	_, _, _ = u.forceSingle.Do(func() (struct{}, error) {
+		log.Warnln("because %s dial failed, activate health check", u.Name())
+		u.healthCheck()
+		return struct{}{}, nil
+	})
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
@@ -211,6 +237,7 @@ func NewURLTest(option GroupCommonOption, urlTestOption URLTestOption, emptyFall
 			Providers:      providers,
 		}),
 		fastSingle:     singledo.NewSingle[C.Proxy](time.Second * 10),
+		forceSingle:    singledo.NewSingle[struct{}](forceTestInterval),
 		disableUDP:     option.DisableUDP,
 		testUrl:        option.URL,
 		expectedStatus: option.ExpectedStatus,
